@@ -1,0 +1,13 @@
+# 薪火 xinhuo — 运行时依赖
+#
+# 核心运行时不依赖任何第三方 Python 包,仅使用标准库
+# (sqlite3 / http.server / urllib / hashlib / json / re / uuid ...)。
+# 需要 Python 3.10 或更高版本。
+#
+# 外部服务通过 HTTP 调用,不需要额外客户端库:
+#   - 一个 OpenAI 兼容的模型端点(embeddings / rerank / chat/completions),
+#     用于向量化、重排、后台整理与审核模型;通过 .env 配置。
+#   - 可选:Qdrant 向量库(仅作派生只读索引),同样走 HTTP。
+#
+# 测试使用标准库 unittest,可直接运行:
+#   PYTHONPATH=xinhuo python3 -m unittest discover -s tests
