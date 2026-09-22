@@ -7,6 +7,10 @@
 
 > 这是从一套真实运行的私有系统整理、脱敏而来的开源发布包。示例名称(如 `阿岚`、`小星`)均为虚构占位;所有密钥、端点、路径都改成了环境变量与可配置项。
 
+> **v2 进度卡**
+>
+> v2 功能已经实现，目前处于 staging 待合并状态，尚未上线。新增内容包括统一 event 窗、情景帧、主模型原生情绪自评、情绪驱动唤醒安全条款，以及手机优先的“记忆观察室”。详见 [薪火 v2 更新说明](./docs/v2-update.md)。
+
 ## 这是什么
 
 - 一个可独立部署的记忆后端:进程内暴露 HTTP `/recall`、`/events`、`/mcp` 等接口。
@@ -75,7 +79,9 @@
 ├── requirements.txt        # 仅需 Python 3.10+ 标准库
 ├── .env.example            # 全部可配置项
 ├── docs/
-│   └── design.md           # 框架设计说明(脱敏)
+│   ├── design.md           # 框架设计说明(脱敏)
+│   └── v2-update.md        # 面向普通读者的 v2 更新卡片
+├── frontend/               # 记忆观察室:mock 前端与 API 契约
 ├── xinhuo/                 # 运行时模块
 │   ├── memory_core.py      # 基础存储与工具函数
 │   ├── memory_v2.py        # 主记忆存储:召回、写入、衰减、审核
@@ -93,6 +99,18 @@
 │   └── ...
 └── tests/                  # 标准库 unittest 用例
 ```
+
+## 记忆观察室前端
+
+`frontend/` 是配套的手机优先观察界面，包含状态、记忆、记录、设置四页，以及 Russell 圆环、情景帧和情绪配方展示。当前只使用虚构 mock 数据，不包含生产记忆、真实消息、私人姓名、密钥或内部网络地址；真实后端接口尚未接通。
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+数据边界与接入约定见 [frontend/README.md](./frontend/README.md) 和 [frontend/API-CONTRACT.md](./frontend/API-CONTRACT.md)。
 
 ## 快速开始
 
