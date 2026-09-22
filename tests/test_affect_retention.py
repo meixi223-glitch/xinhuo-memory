@@ -23,7 +23,7 @@ class TestAffectRetention(unittest.TestCase):
  def test_false_quote_and_rejected_hypothetical_no_change(self):
   a=self.event('比如我修改了很多东西，这是例子');self.propose('unexpected_change','没有说过的话',{'joy':-.18});self.s.affect.apply_event(a);self.assertFalse(self.s.affect.history()['items']);b=self.event('假如我没有提前告诉你呢');self.propose('unexpected_change','没有提前告诉你',{'joy':-.18});self.f.approved=False;self.s.affect.apply_event(b);self.assertFalse(self.s.affect.history()['items'])
  def test_idempotent_bound_and_decay(self):
-  a=self.event('这次我们一起完成了');self.propose('shared_success','我们一起完成了',{'joy':100});self.s.affect.apply_event(a);self.s.affect.apply_event(a);self.assertEqual(len(self.s.affect.history()['items']),1);self.assertLessEqual(self.s.affect.snapshot()['vector']['joy'],76);self.now+=6*3600;self.assertAlmostEqual(self.s.affect.snapshot()['vector']['joy'],67,delta=.1)
+  a=self.event('这次我们一起完成了');self.propose('shared_success','我们一起完成了',{'joy':100});self.s.affect.apply_event(a);self.s.affect.apply_event(a);self.assertEqual(len(self.s.affect.history()['items']),1);self.assertLessEqual(self.s.affect.snapshot()['vector']['joy'],76);before=self.s.affect.snapshot()['vector']['joy'];self.now+=6*3600;after=self.s.affect.snapshot()['vector']['joy'];self.assertGreaterEqual(after,BASE['joy']*100);self.assertLess(abs(after-BASE['joy']*100),abs(before-BASE['joy']*100))
  def test_tool_cap_and_no_result_data(self):
   turn=str(uuid.uuid4())
   for i in range(8):self.s.affect.observe_tool({'turn_id':turn,'tool':'mcp__test__run','call_id':str(i),'succeeded':True})

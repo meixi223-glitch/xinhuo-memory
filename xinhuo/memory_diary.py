@@ -1,5 +1,5 @@
 """Durable, auxiliary-only daily impressions from the completed Shanghai day."""
-import datetime,json,time,hashlib
+import datetime,json,time,hashlib,math
 from zoneinfo import ZoneInfo
 from memory_core import now_iso,parse_time
 from affect_core import BASE,decay
@@ -135,11 +135,23 @@ class DailyImpressions:
         return {'items':out,'schedule':'每天05:00以后整理已结束的上一自然日（Asia/Shanghai），由现有Worker自动执行','primary_model_calls':0,'wake_policy':self.wake_policy()}
 
     def wake_policy(self):
-        now=datetime.datetime.fromtimestamp(self.clock(),TZ);yesterday=(now.date()-datetime.timedelta(days=1)).isoformat();state=self.s.affect.snapshot();v=state['vector']
+        now=datetime.datetime.fromtimestamp(self.clock(),TZ);yesterday=(now.date()-datetime.timedelta(days=1)).isoformat();state=self.s.affect.snapshot();coords=self.s.affect.coordinates();valence=coords['valence'];arousal=coords['arousal']
         with self.s.connect() as db:row=db.execute("SELECT next_day_factor,theme,day FROM daily_impressions WHERE namespace='default' AND day=?",(yesterday,)).fetchone()
         daily=row['next_day_factor'] if row else 1.
-        # Interval multiplier: >1 means less often. Quiet/night and silent
-        # backoff are enforced downstream and cannot be shortened by this hint.
-        mood=1.+max(0,v['tension']-35)/250+max(0,v.get('anger',8)-20)/300+max(0,55-v['energy'])/200-max(0,v['joy']-65)/350-max(0,v.get('longing',15)-25)/400
-        mood=max(.9,min(1.15,mood));factor=round(max(.85,min(1.25,mood*daily)),3)
-        return {'interval_factor':factor,'mood_factor':round(mood,3),'previous_day_factor':daily,'previous_day':yesterday if row else None,'previous_theme':row['theme'] if row else None,'current_labels':state['labels'],'state_revision':state['revision'],'rules':'只温和调整白天正常节奏；夜间、忙碌、主动静默退避优先','generated_at':self.clock(),'primary_model_calls':0}
+        # Continuous Russell-circumplex policy. sqrt(|v*a|) makes every branch
+        # meet at factor=1 on either axis, avoiding jumps at quadrant borders.
+        strength=math.sqrt(abs(valence*arousal));safety_flag=None;skip_proactive=False
+        if valence>=0 and arousal>=0:
+            quadrant='right_up';mood=1-.15*strength;proactive_policy='frequent_ok'
+        elif valence<0 and arousal>=0:
+            quadrant='left_up';mood=1+.20*strength;proactive_policy='restrained'
+            if valence<=-.5 and arousal>=.5:
+                safety_flag='high_arousal_low_valence';skip_proactive=True;mood=max(mood,1.15)
+        elif valence>=0 and arousal<0:
+            quadrant='right_down';mood=1+.10*strength;proactive_policy='sparse'
+        else:
+            quadrant='left_down';mood=1+.15*strength;proactive_policy='self_care_only'
+        mood=max(.85,min(1.25,mood));factor=mood*daily
+        if quadrant!='right_up':factor=max(1.,factor)
+        factor=round(max(.85,min(1.25,factor)),3)
+        return {'interval_factor':factor,'mood_factor':round(mood,3),'valence':valence,'arousal':arousal,'quadrant':quadrant,'proactive_policy':proactive_policy,'skip_proactive':skip_proactive,'safety_flag':safety_flag,'previous_day_factor':daily,'previous_day':yesterday if row else None,'previous_theme':row['theme'] if row else None,'current_labels':state['labels'],'state_revision':state['revision'],'rules':'Russell四象限连续调节；左上不缩短且克制主动消息，极端左上跳过主动外呼；夜间、忙碌、主动静默退避优先','generated_at':self.clock(),'primary_model_calls':0}

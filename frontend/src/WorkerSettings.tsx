@@ -55,15 +55,24 @@ function WorkerEditor({
     setBusy(true);
     try {
       await api.saveWorkerConfig(worker.id, config);
-      onSaved(config);
+      onSaved({
+        ...config,
+        apiKey: "",
+        hasApiKey: !!config.apiKey || config.hasApiKey,
+      });
+      setConfig((c) => ({
+        ...c,
+        apiKey: "",
+        hasApiKey: !!c.apiKey || c.hasApiKey,
+      }));
       setDirty(false);
       setVisible(false);
       setError(false);
-      setStatus("已保存到此浏览器，仅用于这项工作。");
-      notify(`${worker.name}配置已保存在本机。`);
+      setStatus("已保存到服务器，下一次模型请求生效。");
+      notify(`${worker.name}配置已保存到服务器。`);
     } catch {
       setError(true);
-      setStatus("本地存储不可用，配置仍保留在表单里。");
+      setStatus("保存失败，请检查登录状态与服务配置。");
     } finally {
       setBusy(false);
     }
@@ -72,14 +81,14 @@ function WorkerEditor({
     setBusy(true);
     try {
       await api.clearApiKey(worker.id);
-      setConfig((c) => ({ ...c, apiKey: "" }));
-      onSaved({ ...worker.config, apiKey: "" });
+      setConfig((c) => ({ ...c, apiKey: "", hasApiKey: false }));
+      onSaved({ ...worker.config, apiKey: "", hasApiKey: false });
       setVisible(false);
       setError(false);
-      setStatus("这项工作的本机密钥已清除。其他修改仍需保存。");
+      setStatus("服务端密钥已清除。其他修改仍需保存。");
     } catch {
       setError(true);
-      setStatus("清除失败，请检查浏览器存储权限。");
+      setStatus("清除失败，请检查登录状态。");
     } finally {
       setBusy(false);
     }
@@ -148,7 +157,11 @@ function WorkerEditor({
             type={visible ? "text" : "password"}
             value={config.apiKey}
             onChange={(e) => update("apiKey", e.target.value)}
-            placeholder="只保存在这台设备"
+            placeholder={
+              config.hasApiKey
+                ? "已配置；留空保留原密钥"
+                : "填写服务商 API Key（本地服务可留空）"
+            }
           />
           <button
             type="button"
@@ -160,7 +173,7 @@ function WorkerEditor({
           </button>
         </div>
         <p className="field-help">
-          此密钥仅用于{worker.name}的本地配置，不发送请求。
+          密钥提交到你的部署服务器，仅用于{worker.name}请求，不会返回浏览器。
         </p>
         <label className="field-label">
           工作模型
@@ -195,6 +208,26 @@ function WorkerEditor({
             />
           </label>
         )}
+        <button
+          type="button"
+          className="button soft"
+          disabled={busy || dirty}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await api.testWorker(worker.id);
+              setError(false);
+              setStatus("连接成功，真实模型接口已返回有效结果。");
+            } catch (e) {
+              setError(true);
+              setStatus(e instanceof Error ? e.message : "连接失败");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          测试已保存配置
+        </button>
         {status && (
           <p
             className={`form-status ${error ? "error" : "success"}`}
@@ -210,14 +243,14 @@ function WorkerEditor({
         >
           {busy ? "保存中…" : `保存${worker.name}配置`}
         </button>
-        {config.apiKey && (
+        {(config.apiKey || config.hasApiKey) && (
           <button
             type="button"
             className="text-button clear-key"
             onClick={clearKey}
             disabled={busy}
           >
-            清除本机密钥
+            清除服务端密钥
           </button>
         )}
       </form>
@@ -287,7 +320,7 @@ export function WorkerSettings({ notify }: { notify: (text: string) => void }) {
           <div className="worker-count">
             <Check size={15} />
             <span>
-              {configured} / {workers.length} 项已保存到本机
+              {configured} / {workers.length} 项已配置
             </span>
           </div>
           <div className="worker-list">
@@ -312,8 +345,8 @@ export function WorkerSettings({ notify }: { notify: (text: string) => void }) {
         </div>
       )}
       <p className="field-help worker-footnote">
-        工作清单与候选模型来自配置。当前为演示选项，也可以手动填写模型
-        ID；保存不会连接服务或启动工作。
+        填写 API 地址（通常以 /v1 结尾）和模型
+        ID。整理与复核配置完成后，后台会自动处理积压片段。嵌入与重排序可选；测试连接会发送一条固定测试请求，可能产生少量费用。
       </p>
     </section>
   );

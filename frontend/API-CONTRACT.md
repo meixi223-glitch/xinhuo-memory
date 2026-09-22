@@ -1,46 +1,47 @@
-# 前端与后端的适配约定
+# 真实接入契约
 
-这是前端领域模型，不臆造后端路由。后端组员确定真实接口后，只改 `src/api.ts` 中的数据实现。组件消费 TypeScript 对象，不直接依赖供应商响应结构。
+所有网页数据经 `src/api.ts` 访问同源接口。服务端实现位于 `room_server.py`、`room_snapshot.py`、`room_config.py`。
 
-| 方法 | 返回 | 当前行为 |
-| --- | --- | --- |
-| `getSnapshot()` | `Snapshot` | 延迟返回 mock 快照；数据与时间决定显示状态 |
-| `getConfig()` | `EmotionConfig` | 返回八维配置及命名规则表 |
-| `getDailyNotes()` | `Record<day, text>` | 读取按日期组织的本机补充 |
-| `saveDailyNote(day, text)` | `Record<day, text>` | 保存单日补充 |
-| `getWorkerProfiles()` | `WorkerProfile[]` | 返回工作清单、各自的候选模型/协议与本机配置 |
-| `saveWorkerConfig(workerId, config)` | `void` | 按用途独立保存本机配置，无联网副作用 |
-| `clearApiKey(workerId)` | `void` | 只清除该用途的密钥，保留其他用途与字段 |
+| 方法与路由 | 说明 |
+| --- | --- |
+| POST `/api/login` `{token}` | 验证 MEMORY_TOKEN，创建 12 小时 HttpOnly / SameSite=Strict 会话 |
+| GET `/api/session` | 检查会话，未授权 401 |
+| POST `/api/logout` | 撤销当前会话 |
+| GET `/api/snapshot` | SQLite 实时快照、最近 100 条历史、首批条目及 nextOffset |
+| GET `/api/entries?offset=0&query=` | 全库查找/分页，items 与 nextOffset |
+| GET `/api/emotions` | 基础维度及展示配置；复合名称由服务端计算 |
+| GET `/api/workers` | 四类角色的真实配置，不返回 Key，仅 hasApiKey |
+| POST `/api/workers/{id}` | 保存 endpoint / model / apiKey / provider；Key 留空保留旧值 |
+| POST `/api/workers/{id}` `{clearApiKey:true}` | 显式清除指定角色 Key |
+| POST `/api/workers/{id}/test` | 使用已保存配置，发送固定输入验证对应接口 |
+| GET/POST `/api/notes` | 人工每日补充，POST `{day,text}`；独立于模型自述 |
+| GET `/api/candidates` | 最多 100 条候选 |
+| GET `/api/composite-rules` | 动态命名规则 |
+| POST `/api/events` | 追加原始事件并入持久队列；稳定 source_msg_id 去重 |
+| POST `/api/tool` `{name,arguments}` | 限定的记忆写入、召回、核对、固定、归档、恢复及规则编辑 |
 
-## 核心字段
+网页调用无 namespace 参数；实例服务默认 namespace。不是多用户服务。
 
-- `mood.v` / `mood.a`：范围 -1 到 1，缺失使用 `null`，不能用 0 冒充缺失。
-- `mood.dimensions`：按配置 ID 索引，数值范围 0 到 1；不要求分量加起来为 1；缺失维度显示「未提供」。
-- `EmotionConfig.dimensions`：`id`、显示名称、颜色。可增减、重排和改名。
-- `EmotionConfig.compositeRules`：按顺序匹配阈值条件；匹配不到使用 `fallbackLabel`。可以在适配层改成使用后端返回的 `mood.label`，无需改 UI。
-- `scene.body`：界面标签为「状态」，用一句模型自己的感受描述当下，不展示为机器指标清单，也不是人的身体状态。缺失时不推断。
-- `reports[]`：模型自己生成的自评，`label`、v/a、`reason` 与 `quote` 都属于模型。由快照返回，不接受人的表单代填；原话按原样展示。
-- `expiresAt`：整份快照的绝对过期时间，`null` 表示未指定期限。前端按时间自然显示旧快照提示，不从历史条目的年龄推断。
-- `scene.expiresAt`：绝对 ISO 时间；真正过期时卡片变灰。没有帧时返回空字段与 null 时间。
-- `entries[].canonicalId`：可信的共同事件/证据身份。只有 ID 相同才合并；聚合渠道、标签，优先记忆内容，保留较新的事件时间。
-- `recalls[].items`：实际返回给新对话的条目，不能把所有候选塞进来。每条保留 ID、名称和理由。
-- `impressions[].source`：整理来源的显示名称，可为 worker 或人工撰写者；前端不硬推断作者。
-- `stats`：完整数据集统计，和当前加载的可见列表数量不同。
-- `source`：`demo` 或 `live`，由适配层明确声明数据来源。
+## v2 REST / MCP
 
-## 状态语义
+- GET `/events/window?from=<ISO>&to=<ISO>&channel=`：统一事件窗口，按去重指纹聚合渠道。
+- GET `/situation-frames/latest`：`{frame,fresh}`，原始帧含 `generated_at_utc`、`ttl_seconds`、`stale`。前端将生成时间加 TTL 转为绝对 `expiresAt`；过期不续命。
+- POST `/situation-frames/refresh`：写入有明确来源的情景帧，原生字段见 `situation_frames.py`。
+- POST `/affect/self-report`（MCP `mood_self_report`）：`model`、`valence`/`arousal`、`dims`、独立 `relationships`、`reason`、精确原文 `evidence`、`confidence`、`stated_at`、`turn_id` 或 `source_msg_id`。
+- POST `/affect/state`（`mood_status`）、MCP `mood_why`：查看状态或自述。
+- POST `/affect/wake-policy`：连续 Russell 策略，包括 `interval_factor`、`skip_proactive`。
+- MCP `mood_composite_rules` / `mood_composite_rule_set`：读取/修改命名规则。
 
-加载时不展示上一份数据伪装成功，使用骨架屏；读取失败显示可重试的错误页。空数据有具体说明。
+REST / MCP 使用 `Authorization: Bearer <MEMORY_TOKEN>`，不使用网页会话或 URL Token。
 
-情景帧根据 `expiresAt` 过期。历史记忆、自评和日记不会因为年代久远而失效；当整份快照过期时给出全局旧快照提示，保留历史内容。没有产品内的状态选择器。测试通过隔离的 mock 模块响应与虚拟时钟验证加载、空、过期、失败和重试。
+## 数据语义
 
-## 保持边界
+`mood.v/a` 来自已衰减内核，未有状态事件时返回 null。`mood.dimensions` 是最近自述的基础情绪增量，保留符号、范围 -0.18～0.18；`dimensionMode=delta`。未提供的维度返回 null。八个基础维度只接受 joy/sadness/fear/anger/surprise/disgust/anticipation/trust。
 
-- 不将本机保存的 API Key 自动附加到快照、自评、日记、遥测或日志。
-- 不将模型配置保存的 UI 成功提示当作线上 worker 已修改。
-- 不直接导入生产 SQLite、真实消息或密钥到 mock 文件。
-- 真实接口负责鉴权、跨页加载及后端错误转换。当前前端没有启动后台整理、部署、数据库写入或消息发送。
-- 每日的「你的补充」仍是人的本地输入，与模型的当日印象分开。若需同步，先定义授权与同步语义。
-- 旧 `xinhuo-self-reports` 人工草稿保留在本机，但不会读取为模型自述。
-- `WorkerProfile` 清单由适配层给出，含稳定的 `id`、显示名、说明、能力类型、协议选项、模型选项和配置。前端按清单渲染，不假定实际后端只有八种工作。
-- 多模型配置存储于 `xinhuo-worker-configs`，按 `workerId` 索引。旧 `xinhuo-model-config` 只归入记忆整理，在首次成功写入新结构后移除旧槽；不向其他用途复制密钥。
+`relationships` 来自单独的关系状态表；尚未报告时是配置基线，界面明确提示。不能与基础配方混算，也不驱动唤醒频率。
+
+`scene.body` 仅引用近期主模型自己生成的自述，不用用户自己的心情代替。`reports` 只来自 `affect_selfreports`；每日人工补充不进入自述。
+
+`entries.canonicalId` 只使用可信来源身份；相似文字不会自动在时间线合并。`/events/window` 的后端去重指纹视图是单独的窗口能力。`recalls.items` 过滤 `returned=false` 的候选，只显示日志明确实际返回的记忆。
+
+配置保存在服务端，保存成功表示下一次请求将读取新值；连接测试才说明端点接受了真实请求。网络失败、未配置、401、数据为空分别呈现，不回退 mock。

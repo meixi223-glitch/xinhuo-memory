@@ -1,0 +1,15 @@
+services:
+  xinhuo:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${XINHUO_PORT:-18200}:18200"
+    environment:
+      MEMORY_TOKEN: ${MEMORY_TOKEN:?Set MEMORY_TOKEN in .env (24+ characters)}
+      AFFECT_INTAKE_MODE: ${AFFECT_INTAKE_MODE:-self_report}
+      XINHUO_SECURE_COOKIE: ${XINHUO_SECURE_COOKIE:-0}
+    volumes:
+      - xinhuo-data:/data
+    stop_grace_period: 150s
+volumes:
+  xinhuo-data:

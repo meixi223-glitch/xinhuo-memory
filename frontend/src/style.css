@@ -2661,3 +2661,124 @@ progress::-moz-progress-bar {
 .worker-settings > .section-head {
   margin-bottom: 0;
 }
+
+/* Connection and live-library additions preserve the existing room palette. */
+.connection-layout {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 64px;
+  align-items: center;
+  max-width: 1000px;
+  min-height: 65vh;
+  margin: auto;
+  padding: 44px 0;
+}
+.connection-copy > svg {
+  color: var(--accent, #a34f3d);
+}
+.connection-copy h1 {
+  font-size: clamp(38px, 5vw, 64px);
+  line-height: 1.2;
+  margin: 20px 0;
+}
+.connection-copy p {
+  line-height: 1.9;
+}
+.connection-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 13px;
+  margin-top: 28px;
+}
+.connection-form {
+  display: grid;
+  gap: 20px;
+}
+.connection-form h2 {
+  margin: 0;
+}
+.connection-form input {
+  width: 100%;
+}
+.action-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.library-tools {
+  margin-bottom: 24px;
+}
+.library-tools summary {
+  cursor: pointer;
+  font-weight: 600;
+  min-height: 32px;
+}
+.library-tools form {
+  display: grid;
+  gap: 12px;
+}
+.library-tools textarea {
+  min-height: 110px;
+  width: 100%;
+}
+.search-hit {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border, #ddd);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.review-item {
+  border-top: 1px solid var(--border, #ddd);
+  padding: 16px 0;
+}
+.review-item small {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+  .connection-layout {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    min-height: 0;
+    padding: 16px 0;
+  }
+  .connection-copy h1 {
+    font-size: 38px;
+  }
+  .connection-copy > svg {
+    display: none;
+  }
+  .connection-copy p {
+    font-size: 14px;
+  }
+  .connection-points {
+    display: none;
+  }
+  .connection-form {
+    padding: 24px !important;
+  }
+  .action-row .button {
+    flex: 1;
+  }
+}
+.rule-form {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+.rule-form label {
+  font-size: 13px;
+}
+.rule-form .action-row > label {
+  flex: 1;
+  min-width: 110px;
+}
+.rule-form input {
+  width: 100%;
+}

@@ -65,6 +65,12 @@ class MemoryStore(LegacyStore):
                 if 'hits' not in [c[1] for c in db.execute("PRAGMA table_info(memory_seen)").fetchall()]:
                     db.execute("ALTER TABLE memory_seen ADD COLUMN hits INTEGER NOT NULL DEFAULT 0")
             except Exception:pass
+            # Additive v2 provenance: old memories stay NULL and keep their
+            # existing recall behavior.
+            try:
+                if 'emotion_selfreport_id' not in [c[1] for c in db.execute("PRAGMA table_info(memories)").fetchall()]:
+                    db.execute("ALTER TABLE memories ADD COLUMN emotion_selfreport_id TEXT")
+            except Exception:pass
             # Initial index has no extraction or changes to legacy content/status.
             for r in db.execute('SELECT id,kind,pinned,content,summary,tags_json FROM memories').fetchall():
                 db.execute('INSERT OR IGNORE INTO memory_meta VALUES(?,?,?,?,?)',(r['id'],'core' if r['pinned'] else ('experience' if r['kind'] in ('feel','diary','dream') else 'episodic'),'legacy','[]',now_iso()))
@@ -104,6 +110,8 @@ class MemoryStore(LegacyStore):
         result=super().upsert(data);m=result['memory'];mid=m['id']
         with self.connect() as db:
             db.execute('INSERT OR IGNORE INTO memory_meta VALUES(?,?,?,?,?)',(mid,layer,data.get('review_status','self_written'),'[]',now_iso()))
+            if data.get('emotion_selfreport_id'):
+                db.execute('UPDATE memories SET emotion_selfreport_id=? WHERE id=?',(str(data['emotion_selfreport_id']),mid))
             self._index(db,mid)
         self.retention.seed()
         self.enqueue('enrich',{'id':mid},'enrich:'+mid+':'+m['content_hash'])
@@ -397,13 +405,8 @@ class MemoryStore(LegacyStore):
                             m=allowed[mid];m['selection_reason']=clean(j.get('reason'),180);selected.append(m);seen.add(mid)
                     reason=clean(judged.get('reason'),240) or 'relevance_review'
                 except Exception as e:
-                    error=clean(str(e),120) or type(e).__name__
-                    degraded.append('review:'+type(e).__name__+':'+error)
-                    fallback=[m for m in review_pool if m.get('lexical_hit') or float(m.get('semantic_score') or 0)>=0.72]
-                    for m in fallback[:2]:
-                        m['selection_reason']='review fallback'
-                        selected.append(m)
-                    reason='review_fallback' if selected else 'review_unavailable'
+                    degraded.append('review:'+type(e).__name__)
+                    reason='review_unavailable'
             else:reason='no_match'
         # (b) reranker precision: order judge-selected memories by rerank relevance before
         # budgeting; entries without a score keep their original relative order (stable sort).
@@ -414,45 +417,12 @@ class MemoryStore(LegacyStore):
         except Exception as e:
             degraded.append('rerank_sort:'+type(e).__name__)
         used=0;omitted=[]
-        # (a) cooldown de-weighting: precompute per-memory injection history for this session.
-        # Falls back to the legacy 30-minute hard skip if this new path fails.
-        cool={};cool_ok=False
-        try:
-            if session and mode=='auto' and selected:
-                ids=[m['id'] for m in selected];marks=','.join('?' for _ in ids)
-                with self.connect() as cdb:
-                    for row in cdb.execute('SELECT memory_id,version,seen_at,hits FROM memory_seen WHERE session_key=? AND memory_id IN ('+marks+')',[session,*ids]).fetchall():
-                        cool[row['memory_id']]=dict(row)
-            cool_ok=True
-        except Exception as e:
-            degraded.append('cooldown:'+type(e).__name__);cool={};cool_ok=False
-        def _cool_info(m):
-            v=digest(m['content_hash']+str(m.get('summary'))+m['version_status'])
-            protected=bool(m.get('pinned')) or m.get('layer')=='core'
-            info=cool.get(m['id'])
-            if not info or info.get('version')!=v:return {'recent':False,'hits':0,'protected':protected}
-            return {'recent':(time.time()-info['seen_at'])<1800,'hits':int(info.get('hits') or 0),'protected':protected}
-        infos={};fresh_exists=True
-        if cool_ok and cool:
-            try:
-                infos={m['id']:_cool_info(m) for m in selected}
-                fresh_exists=any(not infos[mid]['recent'] for mid in infos) if infos else True
-                # Stable re-sort: recently-injected, non-protected memories fall behind fresh
-                # ones; the reranker order from (b) is preserved within each group.
-                selected.sort(key=lambda m:(0,0) if infos.get(m['id'],{}).get('protected') else (1 if infos.get(m['id'],{}).get('recent') else 0,infos.get(m['id'],{}).get('hits',0)))
-            except Exception as e:
-                degraded.append('cooldown_sort:'+type(e).__name__);infos={};cool_ok=False
         with self.connect() as db:
             for m in selected:
                 if len(returned)>=limit:break
                 v=digest(m['content_hash']+str(m.get('summary'))+m['version_status'])
-                # (a) graded cooldown: only drop when over-repeated (hits>=3), unprotected, and a
-                # fresher candidate exists; otherwise the memory is merely deprioritized above.
-                if mode=='auto' and cool_ok:
-                    ci=infos.get(m['id']) or _cool_info(m)
-                    if ci['recent'] and ci['hits']>=3 and not ci['protected'] and fresh_exists:
-                        omitted.append(m['id']);continue
-                elif mode=='auto' and session:
+                # Only a confirmed delivery suppresses unchanged memories for 30 minutes.
+                if mode=='auto' and session:
                     previous=db.execute('SELECT version,seen_at FROM memory_seen WHERE session_key=? AND memory_id=?',(session,m['id'])).fetchone()
                     if previous and previous['version']==v and time.time()-previous['seen_at']<1800:
                         omitted.append(m['id']);continue
@@ -462,8 +432,8 @@ class MemoryStore(LegacyStore):
                     rr=m.get('rerank_score');ss=m.get('semantic_score')
                     conf=max(float(rr) if isinstance(rr,(int,float)) and not isinstance(rr,bool) else 0.0,float(ss) if isinstance(ss,(int,float)) and not isinstance(ss,bool) else 0.0)
                 except Exception:conf=0.0
-                tier_order=['full','summary','light'];start=0 if conf>=0.6 else (1 if conf>=0.3 else 2)
-                for ti in range(start,len(tier_order)):
+                tier_order=['full','summary','light'];tier_start=0 if conf>=0.6 else (1 if conf>=0.3 else 2)
+                for ti in range(tier_start,len(tier_order)):
                     try:b=self._render(m,tier_order[ti])
                     except Exception:b=self.brief(m)
                     cost=tokens(b)
@@ -472,7 +442,7 @@ class MemoryStore(LegacyStore):
                 # Mark only after bridge confirms delivery through /recall/commit.
             # (d) behaviour-independent rule/preference channel: inject a few high-importance
             # procedural memories that text recall may miss, on an isolated ~250-token budget.
-            if mode=='auto':
+            if mode=='auto' and reason != 'review_unavailable':
                 try:
                     have={x['id'] for x in returned};rule_used=0;rule_added=0
                     rule_rows=db.execute("SELECT m.*,x.layer FROM memories m JOIN memory_meta x ON x.memory_id=m.id WHERE m.namespace=? AND m.version_status='current' AND x.layer='procedural' AND (m.pinned=1 OR m.importance>=0.8) ORDER BY m.pinned DESC,m.importance DESC LIMIT 8",(ns,)).fetchall()
@@ -480,8 +450,9 @@ class MemoryStore(LegacyStore):
                         if rule_added>=3:break
                         rm=self._row(r)
                         if rm['id'] in have:continue
-                        ci=_cool_info(rm) if cool_ok else {'recent':False,'hits':0}
-                        if ci.get('recent') and ci.get('hits',0)>=3:continue
+                        previous=db.execute('SELECT version,seen_at FROM memory_seen WHERE session_key=? AND memory_id=?',(session,rm['id'])).fetchone() if session else None
+                        version=digest(rm['content_hash']+str(rm.get('summary'))+rm['version_status'])
+                        if previous and previous['version']==version and time.time()-previous['seen_at']<1800:continue
                         rb=self._render(rm,'light');rb['channel']='rule';cost=tokens(rb)
                         if rule_used+cost>250:continue
                         returned.append(rb);rule_used+=cost;used+=cost;rule_added+=1;selected.append(rm)

@@ -10,7 +10,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from memory_core import structured_payload
-from memory_v2 import MemoryStore
+from memory_v2 import MemoryStore, SECRET
+from event_window import EventWindowStore
+from situation_frames import SituationFrameStore
 
 HOST = os.environ.get("MEMORY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MEMORY_PORT", "18200"))
@@ -18,6 +20,8 @@ TOKEN = os.environ.get("MEMORY_TOKEN", "")
 WAKE_TOKEN = os.environ.get("AFFECT_WAKE_TOKEN", "")
 CONTINUITY_REVIEW_TOKEN = os.environ.get("MEMORY_CONTINUITY_REVIEW_TOKEN", "")
 STORE = MemoryStore(os.environ.get("MEMORY_DB", "./data/memory.sqlite3"), os.environ.get("MEMORY_ARCHIVE_DIR", "./data/archive"))
+EVENTS = EventWindowStore(STORE.db_path)
+FRAMES = SituationFrameStore(STORE.db_path)
 
 TOOLS = [
     ("continuity_status", "查看连续性副脑统计；不读取事实库全文"),
@@ -28,6 +32,10 @@ TOOLS = [
     ("memory_daily", "查看整日印象、来源和次日唤醒节奏影响"),
     ("mood_status", "读取当前多维表达状态；只作参考，不推断用户授权"),
     ("mood_history", "分页查看表达状态变化和依据，不修改状态"),
+    ("mood_why", "读取主模型自评的理由、原文证据与动态复合情绪名称"),
+    ("mood_self_report", "主模型仅在操作性情绪显著变化时提交有原文证据的自评"),
+    ("mood_composite_rules", "读取可编辑的复合情绪命名规则"),
+    ("mood_composite_rule_set", "新增或更新复合情绪命名规则；只组合八种基础情绪"),
     ("memory_restore", "恢复尘封记忆为1点权重和30天保护；遇到新事实冲突转待核对"),
     ("memory_status", "查看记忆统计与后台整理任务，不读取全部记忆"),
     ("memory_evidence", "按event_id查看相关原始对话证据"),
@@ -80,8 +88,13 @@ def schema_for(name: str) -> dict:
         return {"type":"object","properties":{**common,"status":{"type":"string"},"limit":{"type":"integer"},"include_evidence":{"type":"boolean"}}}
     if name == "continuity_recall":
         return {"type":"object","properties":{**common,"query":{"type":"string"},"context":{"type":"string"},"limit":{"type":"integer"},"budget_tokens":{"type":"integer"}},"required":["query"]}
-    if name in {"memory_status", "memory_recalls", "memory_organize", "memory_browse", "mood_status", "mood_history", "memory_daily"}:
+    if name in {"memory_status", "memory_recalls", "memory_organize", "memory_browse", "mood_status", "mood_history", "mood_why", "memory_daily"}:
         return {"type":"object","properties":{**common,"query":{"type":"string"},"status":{"type":"string"},"layer":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}}}
+    if name == "mood_self_report":
+        return {"type":"object","properties":{**common,"session_id":{"type":"string"},"turn_id":{"type":"string"},"source_msg_id":{"type":"string"},"model":{"type":"string"},"valence":{"type":"number","minimum":-1,"maximum":1},"arousal":{"type":"number","minimum":-1,"maximum":1},"dims":{"type":"object","description":"Only joy/sadness/fear/anger/surprise/disgust/anticipation/trust; each -0.18..0.18","additionalProperties":{"type":"number","minimum":-.18,"maximum":.18}},"relationships":{"type":"object","description":"Separate intimacy/longing/desire/companionship group; each -0.18..0.18","additionalProperties":{"type":"number","minimum":-.18,"maximum":.18}},"reason":{"type":"string","maxLength":80},"evidence":{"type":"array","items":{"type":"string"},"minItems":1},"confidence":{"type":"number","minimum":0,"maximum":1},"stated_at":{"type":"string"}},"required":["model","valence","arousal","reason","evidence","confidence","stated_at"]}
+    if name == "mood_composite_rules":return {"type":"object","properties":{}}
+    if name == "mood_composite_rule_set":
+        return {"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"components":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":4},"min_component":{"type":"number"},"min_total":{"type":"number"},"priority":{"type":"integer"},"enabled":{"type":"boolean"}},"required":["id","name","components"]}
     if name == "memory_evidence": return {"type":"object","properties":{**common,"event_id":{"type":"string"}},"required":["event_id"]}
     if name == "memory_review": return {"type":"object","properties":{"id":{"type":"string"},"action":{"type":"string","enum":["approve","reject","replace"]},"replaces_id":{"type":"string"}},"required":["id","action"]}
     if name in {"memory_search", "memory_recall"}:
@@ -104,7 +117,7 @@ def schema_for(name: str) -> dict:
     if name == "glossary_set":
         return {"type": "object", "properties": {"term": {"type": "string"}, "definition": {"type": "string"}}, "required": ["term", "definition"]}
     if name == "memory_upsert":
-        return {"type": "object", "properties": {**common, "content": {"type": "string"}, "layer": {"type":"string","enum":["core","semantic","episodic","procedural","experience"]}, "summary":{"type":"string"}, "source_event_id":{"type":"string"}, "source":{"type":"string"}, "fact_key": {"type": "string"}, "occurred_at": {"type": "string"}, "known_at": {"type": "string"}, "strength": {"type": "number"}, "importance": {"type": "number"}, "emotion_label": {"type": "string"}, "emotion_intensity": {"type": "integer"}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["content", "emotion_label", "emotion_intensity"]}
+        return {"type": "object", "properties": {**common, "content": {"type": "string"}, "layer": {"type":"string","enum":["core","semantic","episodic","procedural","experience"]}, "summary":{"type":"string"}, "source_event_id":{"type":"string"}, "source":{"type":"string"}, "fact_key": {"type": "string"}, "occurred_at": {"type": "string"}, "known_at": {"type": "string"}, "strength": {"type": "number"}, "importance": {"type": "number"}, "emotion_label": {"type": "string"}, "emotion_intensity": {"type": "integer"}, "emotion_selfreport_id":{"type":"string"}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["content"]}
     if name == "thought_add":
         return {"type": "object", "properties": {"content": {"type": "string"}, "mood": {"type": "string"}}, "required": ["content"]}
     if name == "thought_list":
@@ -112,6 +125,19 @@ def schema_for(name: str) -> dict:
     if name == "thought_resolve":
         return {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
     return {"type": "object", "properties": common}
+
+
+def ingest_with_window(data):
+    if SECRET.search(str(data.get('content') or '')):
+        raise ValueError('credential_like_content_rejected')
+    # Validate the event-window timestamp before writing the raw event.
+    from event_window import utc_iso
+    if data.get('occurred_at'): utc_iso(data['occurred_at'])
+    result = STORE.ingest_event(data)
+    if not result.get('duplicate'):
+        EVENTS.ingest({**data, 'event_id': result['id']}, source_raw_event_id=result['id'])
+        STORE.enqueue('situation_frame', {'event_id': result['id']}, 'situation:'+result['id'])
+    return result
 
 
 def call_tool(name: str, args: dict):
@@ -125,6 +151,10 @@ def call_tool(name: str, args: dict):
     if name == "memory_daily": return STORE.daily.browse(int(args.get("limit",30)),int(args.get("offset",0)))
     if name == "mood_status": return STORE.affect.snapshot(ns)
     if name == "mood_history": return STORE.affect.history(ns,int(args.get("limit",80)),int(args.get("offset",0)))
+    if name == "mood_why": return STORE.affect.why(ns,int(args.get("limit",20)))
+    if name == "mood_self_report": return STORE.affect.apply_self_report({**args,"namespace":ns})
+    if name == "mood_composite_rules": return STORE.affect.composite_rules()
+    if name == "mood_composite_rule_set": return STORE.affect.set_composite_rule(args)
     if name == "memory_restore": return STORE.retention.restore(str(args["id"]))
     if name == "memory_status": return STORE.overview(ns)
     if name == "memory_browse": return STORE.browse(args)
@@ -141,10 +171,13 @@ def call_tool(name: str, args: dict):
         return value
     if name == "memory_history": return STORE.history(str(args["fact_key"]), ns)
     if name == "memory_upsert":
+        if args.get("emotion_selfreport_id"):
+            emotion=STORE.affect.memory_emotion(str(args["emotion_selfreport_id"]),ns)
+            args={**args,"emotion_label":emotion["label"],"emotion_intensity":emotion["intensity"]}
         require_mood(args)
         return STORE.upsert(args)
     if name == "memory_supersede": return STORE.supersede(str(args["old_id"]), args)
-    if name == "memory_ingest": return STORE.ingest_event(args)
+    if name == "memory_ingest": return ingest_with_window(args)
     if name == "memory_pin": return STORE.pin(str(args["id"]), bool(args.get("pinned", True)))
     if name in {"memory_archive", "memory_delete"}: return STORE.archive(str(args["id"]), str(args.get("reason") or name))
     if name == "memory_export": return STORE.export(ns)
@@ -178,15 +211,32 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/continuity/latent/review","/continuity/trajectory/state"):
             supplied=self.headers.get("Authorization","")
             return bool(CONTINUITY_REVIEW_TOKEN) and hmac.compare_digest(supplied,f"Bearer {CONTINUITY_REVIEW_TOKEN}")
-        if WAKE_TOKEN and urlparse(self.path).path in ("/affect/wake-policy", "/affect/wake-mood") and self.headers.get("Authorization", "")==f"Bearer {WAKE_TOKEN}":return True
+        if WAKE_TOKEN and urlparse(self.path).path in ("/affect/wake-policy", "/affect/wake-mood", "/affect/self-report") and self.headers.get("Authorization", "")==f"Bearer {WAKE_TOKEN}":return True
         if not TOKEN:
             return True
         query_token = parse_qs(urlparse(self.path).query).get("token", [""])[0]
         return self.headers.get("Authorization", "") == f"Bearer {TOKEN}" or query_token == TOKEN
 
     def do_GET(self):
-        if urlparse(self.path).path == "/health":
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
             return self.send_json(200, {"ok": True, "service": "xinhuo", "storage": "sqlite", "mode": "current-by-default"})
+        if not self.authorized():
+            return self.send_json(401, {"error": "unauthorized"})
+        try:
+            if parsed.path == "/events/window":
+                query = parse_qs(parsed.query)
+                from_utc = str((query.get("from") or [""])[0])
+                to_utc = str((query.get("to") or [""])[0])
+                if not from_utc or not to_utc:
+                    raise ValueError("from and to are required UTC timestamps")
+                channel = str((query.get("channel") or [""])[0]).strip() or None
+                return self.send_json(200, EVENTS.window(from_utc, to_utc, channel))
+            if parsed.path == "/situation-frames/latest":
+                frame = FRAMES.latest()
+                return self.send_json(200, {"frame": frame, "fresh": bool(frame and not frame["stale"])})
+        except Exception as exc:
+            return self.send_json(400, {"error": str(exc)})
         self.send_json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -202,6 +252,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/affect/wake-mood":
                 mood = call_tool("mood_status", {})
                 return self.send_json(200, {"vector": {key: mood["vector"][key] for key in ("longing", "sharing", "companionship")}})
+            if path == "/affect/self-report": return self.send_json(200, STORE.affect.apply_self_report(data))
             if path == "/affect/tool": return self.send_json(200, STORE.affect.observe_tool(data))
             if path == "/usage": return self.send_json(200, STORE.retention.touch(list(data.get("ids") or [])[:15],str(data.get("receipt") or "")[:200] or None))
             if path == "/recall": return self.send_json(200, STORE.recall_pack(data))
@@ -213,14 +264,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/continuity/latent/review": return self.send_json(200, STORE.continuity.review_latent(str(data.get("id","")),str(data.get("action","")),str(data.get("note") or ""),str(data.get("namespace") or "default")))
             if path == "/continuity/trajectory/state": return self.send_json(200, STORE.continuity.set_trajectory_state(str(data.get("id","")),str(data.get("state","")),str(data.get("namespace") or "default")))
             if path == "/boot": return self.send_json(200, STORE.boot(str(data.get("namespace","default"))))
-            if path == "/events": return self.send_json(200, STORE.ingest_event(data))
+            if path == "/events":
+                raw_event = ingest_with_window(data)
+                return self.send_json(200, raw_event)
+            if path == "/situation-frames/refresh":
+                return self.send_json(201, FRAMES.write(data))
             if path == "/capsule": return self.send_json(200, STORE.sync_capsule(data))
             if path == "/patrol": return self.send_json(200, STORE.patrol(str(data.get("namespace") or "default")))
             if path == "/mcp": return self.handle_mcp(data)
             return self.send_json(404, {"error": "not found"})
         except Exception as exc:
-            traceback.print_exc()
-            self.send_json(400, {"error": str(exc)})
+            self.send_json(400, {"error": "invalid_request", "kind": type(exc).__name__})
 
     def handle_mcp(self, request: dict):
         request_id = request.get("id")

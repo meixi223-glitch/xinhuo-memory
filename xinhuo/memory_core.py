@@ -259,7 +259,8 @@ class MemoryStore:
                 data.get("last_recalled_at"), int(data.get("recall_count") or 0),
                 str(data.get("created_at") or known), str(data.get("updated_at") or ts), digest,
             )
-            db.execute("INSERT INTO memories VALUES(" + ",".join("?" for _ in fields) + ")", fields)
+            columns=("id","namespace","kind","content","summary","fact_key","occurred_at","known_at","superseded_at","supersedes_id","superseded_by_id","version_status","strength","strength_updated_at","importance","confidence","emotion_label","emotion_intensity","pinned","source","source_ref","source_event_id","tags_json","response_tendency","last_recalled_at","recall_count","created_at","updated_at","content_hash")
+            db.execute("INSERT INTO memories("+",".join(columns)+") VALUES("+",".join("?" for _ in fields)+")",fields)
             result_status = "created"
             if current and status == "candidate":
                 review_id = f"conf_{uuid.uuid4().hex}"

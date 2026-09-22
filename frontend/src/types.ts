@@ -1,5 +1,8 @@
 export type Channel = "企微" | "聊天" | "论坛" | "其他";
 export type Entry = {
+  pinned?: boolean;
+  versionStatus?: string;
+  layer?: string;
   id: string;
   title: string;
   body: string;
@@ -27,6 +30,16 @@ export type Impression = {
   source: string;
 };
 export type Snapshot = {
+  nextOffset?: number | null;
+  wakePolicy?: {
+    skip_proactive: boolean;
+    interval_factor: number;
+    proactive_policy: string;
+  };
+  relationships?: {
+    names: Record<string, string>;
+    vector: Record<string, number>;
+  };
   source: "demo" | "live";
   capturedAt: string;
   expiresAt: string | null;
@@ -35,6 +48,7 @@ export type Snapshot = {
     a: number | null;
     label: string;
     updatedAt: string;
+    dimensionMode?: "delta";
     dimensions: Record<string, number | null>;
     note: string;
   };
@@ -72,6 +86,7 @@ export type Snapshot = {
 };
 
 export type WorkerConfig = {
+  hasApiKey?: boolean;
   endpoint: string;
   model: string;
   custom: string;

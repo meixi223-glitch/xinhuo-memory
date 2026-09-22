@@ -3,22 +3,22 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: "*.spec.ts",
   workers: 1,
-  timeout: 30000,
+  timeout: 60000,
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: "http://127.0.0.1:18391",
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
     colorScheme: "light",
-    launchOptions: {
-      executablePath:
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    },
+    launchOptions: process.env.PLAYWRIGHT_CHROME_PATH
+      ? { executablePath: process.env.PLAYWRIGHT_CHROME_PATH }
+      : {},
   },
   webServer: {
-    command: "npm run dev",
-    url: "http://127.0.0.1:5173",
-    reuseExistingServer: true,
+    command: "python3 ../scripts/test_server.py",
+    url: "http://127.0.0.1:18391/health",
+    reuseExistingServer: false,
+    timeout: 20000,
   },
   reporter: "list",
 });

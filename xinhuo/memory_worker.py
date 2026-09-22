@@ -67,9 +67,9 @@ class Worker:
                     db.execute('INSERT OR IGNORE INTO memory_jobs(id,kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?)',(key,'continuity_refresh',json.dumps({'ids':ids,'namespace':namespace}),now_iso(),now_iso()))
                 db.execute("INSERT OR REPLACE INTO memory_state VALUES('continuity_event_cursor',?)",(json.dumps(continuity_rows[-1]['rowid']),))
             # Index/enrich legacy and changed records in bounded batches.
-            missing=db.execute("SELECT m.id,m.content_hash FROM memories m LEFT JOIN memory_vectors v ON v.memory_id=m.id WHERE (v.memory_id IS NULL OR v.content_hash!=m.content_hash) AND m.version_status IN ('current','candidate') LIMIT 8").fetchall()
-            if missing:
-                ids=[r['id'] for r in missing];key='enrich-batch:'+digest('|'.join(r['id']+r['content_hash'] for r in missing))
+            missing=db.execute("SELECT m.id,m.content_hash FROM memories m LEFT JOIN memory_vectors v ON v.memory_id=m.id WHERE (v.memory_id IS NULL OR v.content_hash!=m.content_hash OR v.model!=?) AND m.version_status IN ('current','candidate') LIMIT 8",(self.s.models.embed_model,)).fetchall()
+            if missing and getattr(self.s.models,'embedding_enabled',True):
+                ids=[r['id'] for r in missing];key='enrich-batch:'+digest(self.s.models.embed_model+'|'+ '|'.join(r['id']+r['content_hash'] for r in missing))
                 db.execute('INSERT OR IGNORE INTO memory_jobs(id,kind,payload_json,created_at,updated_at) VALUES(?,?,?,?,?)',(key,'enrich_batch',json.dumps({'ids':ids}),now_iso(),now_iso()))
 
     def claim(self):
@@ -215,7 +215,9 @@ class Worker:
         # A rejected generated summary never replaces grounded text; use a complete
         # original when small, otherwise leave empty and let budget omit long facts.
         updates=[(m,old,summary if old['id'] in passed else '',layer) for m,old,summary,layer in updates]
-        vectors=self.s.models.embed([old['content']+'\n'+summary for _,old,summary,_ in updates],timeout=60)
+        vector_model=self.s.models.embed_model
+        vectors=self.s.models.embed([old['content']+'\n'+summary for _,old,summary,_ in updates],timeout=60) if getattr(self.s.models,'embedding_enabled',True) else [None]*len(updates)
+        if vector_model!=self.s.models.embed_model:raise ValueError('embedding_configuration_changed')
         with self.s.connect() as db:
             for (m,old,summary,layer),v in zip(updates,vectors):
                 current=db.execute('SELECT content_hash FROM memories WHERE id=?',(old['id'],)).fetchone()
@@ -224,7 +226,7 @@ class Worker:
                 db.execute('UPDATE memories SET summary=? WHERE id=?',(summary,old['id']))
                 ents=[clean(x,80) for x in m.get('entities',[])[:12] if isinstance(x,str)]
                 db.execute('UPDATE memory_meta SET layer=?,entities_json=?,updated_at=? WHERE memory_id=?',(layer,json.dumps(ents,ensure_ascii=False),now_iso(),old['id']))
-                db.execute('INSERT OR REPLACE INTO memory_vectors VALUES(?,?,?,?,?)',(old['id'],self.s.models.embed_model,old['content_hash'],json.dumps(v),now_iso()))
+                if v is not None:db.execute('INSERT OR REPLACE INTO memory_vectors VALUES(?,?,?,?,?)',(old['id'],vector_model,old['content_hash'],json.dumps(v),now_iso()))
                 self.s._index(db,old['id'])
                 for other in db.execute("SELECT x.memory_id,x.entities_json FROM memory_meta x JOIN memories m ON m.id=x.memory_id WHERE x.memory_id!=? AND m.namespace=? AND m.version_status='current'",(old['id'],old['namespace'])).fetchall():
                     shared=(set(ents)&set(json.loads(other['entities_json'])))-{'小星','阿岚','用户','助手','Alan','Xiaoxing','PrimaryModel'}
@@ -235,6 +237,7 @@ class Worker:
         with self.s.connect() as db:
             allv=db.execute("SELECT m.id,m.content,m.summary,m.namespace,v.vector_json FROM memories m JOIN memory_vectors v ON v.memory_id=m.id WHERE m.version_status='current' AND v.model=?",(self.s.models.embed_model,)).fetchall()
         for (_,old,_,_),v in zip(updates,vectors):
+            if v is None:continue
             nearby=[]
             for other in allv:
                 if other['id']==old['id'] or other['namespace']!=old['namespace']:continue
@@ -293,6 +296,9 @@ class Worker:
                 with self.s.connect() as db:check=db.execute('SELECT status FROM affect_evaluations WHERE event_id=?',(p['id'],)).fetchone()
                 if check and check[0] in ('failed','running'):raise RuntimeError('affect_appraisal_retry')
                 result={'status':'appraised','primary_model_calls':0}
+            elif kind=='situation_frame':
+                from situation_frames import generate_frame
+                result=generate_frame(self.s,p)
             elif kind=='reading_note':result=self.reading.note(p)
             elif kind=='reading_extract':result=self.reading.extract(p)
             elif kind=='daily_part':result=self.s.daily.part(p)

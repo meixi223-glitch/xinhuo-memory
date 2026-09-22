@@ -33,6 +33,9 @@ import {
 import type { Snapshot, Entry, Report, Channel } from "./types";
 import { mergeEntries, time, date, signed } from "./data";
 import { api } from "./api";
+import { EmotionRules } from "./EmotionRules";
+import { Connection } from "./Connection";
+import { LibraryTools, MemoryActions } from "./LibraryTools";
 import { WorkerSettings } from "./WorkerSettings";
 import type { EmotionConfig } from "./config";
 
@@ -172,7 +175,13 @@ function MoodWheel({
             style={{ left: `${px}%`, top: `${py}%` }}
           >
             <span className="emotion-dot" />
-            <span className="emotion-tag">
+            <span
+              className="emotion-tag"
+              style={{
+                left: px > 65 ? "auto" : undefined,
+                right: px > 65 ? "8px" : undefined,
+              }}
+            >
               {mood.label}
               <Sparkle size={12} weight="fill" />
             </span>
@@ -324,8 +333,14 @@ function Status({
               <MoodWheel mood={data.mood} config={config} />
               <div className="emotion-components">
                 <div className="components-title">
-                  <span>此刻的情绪配方</span>
-                  <span>分量</span>
+                  <span>
+                    {data.mood.dimensionMode === "delta"
+                      ? "最近自述的情绪变化"
+                      : "此刻的情绪配方"}
+                  </span>
+                  <span>
+                    {data.mood.dimensionMode === "delta" ? "变化量" : "分量"}
+                  </span>
                 </div>
                 {config.dimensions.map(({ id, name, color }) => {
                   const val = data.mood.dimensions[id];
@@ -335,13 +350,17 @@ function Status({
                       <div className="component-track">
                         <div
                           style={{
-                            width: `${(val ?? 0) * 100}%`,
+                            width: `${data.mood.dimensionMode === "delta" ? Math.min(100, (Math.abs(val ?? 0) / 0.18) * 100) : (val ?? 0) * 100}%`,
                             background: color,
                           }}
                         />
                       </div>
                       <b>
-                        {val == null ? "未提供" : `${Math.round(val * 100)}%`}
+                        {val == null
+                          ? "未提供"
+                          : data.mood.dimensionMode === "delta"
+                            ? signed(val)
+                            : `${Math.round(val * 100)}%`}
                       </b>
                     </div>
                   );
@@ -355,7 +374,7 @@ function Status({
                       ? "一切感受，都可以慢慢来。"
                       : "此刻的感受，不止一种。"}
                     <br />
-                    <small>{"名字和分量由情绪配置决定。"}</small>
+                    <small>{"名称由后端规则计算，变化量保留正负方向。"}</small>
                   </span>
                 </div>
               </div>
@@ -1082,7 +1101,7 @@ function Records({
                       </button>
                     </>
                   )}
-                  <footer>保存在本机，随时可以修改。</footer>
+                  <footer>保存在你的服务器，随时可以修改。</footer>
                 </article>
               </div>
             </>
@@ -1238,6 +1257,37 @@ function Settings({
             )}
           </section>
           <WorkerSettings notify={notify} />
+          <EmotionRules />
+          {data.wakePolicy && (
+            <section className="card settings-card">
+              <h2>主动唤醒</h2>
+              <p>
+                {data.wakePolicy.skip_proactive
+                  ? "当前状态限制主动唤醒"
+                  : "当前未触发情绪硬阻断"}
+              </p>
+              <p>
+                间隔系数：{data.wakePolicy.interval_factor} ·{" "}
+                {data.wakePolicy.proactive_policy}
+              </p>
+              <p className="field-help">
+                这里只提供策略；实际发送仍由上层桥接系统控制。
+              </p>
+            </section>
+          )}
+          {data.relationships && (
+            <section className="card settings-card">
+              <h2>关系维度</h2>
+              <p className="field-help">
+                独立于八种基础情绪；没有自评时显示系统基线。
+              </p>
+              {Object.entries(data.relationships.vector).map(([k, v]) => (
+                <p key={k}>
+                  {data.relationships!.names[k]} <b>{v.toFixed(1)}%</b>
+                </p>
+              ))}
+            </section>
+          )}
         </div>
         <aside className="settings-aside">
           <section className="card settings-card">
@@ -1262,10 +1312,10 @@ function Settings({
           </section>
           <section className="settings-footnote">
             <ShieldCheck size={23} />
-            <h3>只属于这台设备</h3>
+            <h3>留在你的服务器</h3>
             <p>
-              人的每日补充和模型设置只存本地。清理浏览器数据也会清除它们。演示不会对外发送
-              API Key。
+              每日补充与工人配置保存在部署服务器。API Key
+              不返回浏览器，仅由后端用于对应的模型请求。请保护数据卷及配置备份。
             </p>
           </section>
         </aside>
@@ -1302,6 +1352,9 @@ function LoadingPage({ page }: { page: Page }) {
   );
 }
 export default function App() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [moreBusy, setMoreBusy] = useState(false);
   const [page, setPage] = useState<Page>(getPage);
   const [data, setData] = useState<Snapshot | null>(null);
   const [config, setConfig] = useState<EmotionConfig | null>(null);
@@ -1334,7 +1387,23 @@ export default function App() {
     }
   };
   useEffect(() => {
-    load();
+    const requireLogin = () => {
+      setAuthenticated(false);
+      setData(null);
+      ++request.current;
+      setChecking(false);
+    };
+    window.addEventListener("xinhuo-auth-required", requireLogin);
+    api
+      .session()
+      .then(() => {
+        setAuthenticated(true);
+        load();
+      })
+      .catch(() => {})
+      .finally(() => setChecking(false));
+    return () =>
+      window.removeEventListener("xinhuo-auth-required", requireLogin);
   }, []);
   useEffect(() => {
     const fn = () => setPage(getPage());
@@ -1369,6 +1438,34 @@ export default function App() {
       setToast("外观已切换，偏好未能保存。");
     }
   };
+  const more = async () => {
+    if (data?.nextOffset == null || moreBusy) return;
+    setMoreBusy(true);
+    try {
+      const result = await api.getEntries(data.nextOffset);
+      setData((old) =>
+        old
+          ? {
+              ...old,
+              entries: [
+                ...old.entries,
+                ...result.items.filter(
+                  (e) =>
+                    !old.entries.some(
+                      (x) => x.id === e.id && x.kind === e.kind,
+                    ),
+                ),
+              ],
+              nextOffset: result.nextOffset,
+            }
+          : old,
+      );
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "加载失败");
+    } finally {
+      setMoreBusy(false);
+    }
+  };
   const reports = [...(data?.reports || [])].sort(
     (a, b) => Date.parse(b.at) - Date.parse(a.at),
   );
@@ -1391,7 +1488,7 @@ export default function App() {
         </button>
         <div className="header-actions">
           <button className="data-mode" onClick={() => go("settings")}>
-            {data?.source === "live" ? "已连接" : "MOCK"}
+            {authenticated ? "已连接" : "未连接"}
           </button>
           <button
             className="avatar"
@@ -1406,7 +1503,16 @@ export default function App() {
         {data && !loading && !error && (
           <SnapshotFreshness expiresAt={data.expiresAt} refresh={load} />
         )}
-        {loading ? (
+        {checking ? (
+          <LoadingPage page={page} />
+        ) : !authenticated ? (
+          <Connection
+            connected={() => {
+              setAuthenticated(true);
+              load();
+            }}
+          />
+        ) : loading ? (
           <LoadingPage page={page} />
         ) : error ? (
           <div className="error-state">
@@ -1430,6 +1536,9 @@ export default function App() {
               />
             )}{" "}
             {page === "memory" && (
+              <LibraryTools refresh={load} detail={setSelected} />
+            )}
+            {page === "memory" && (
               <Memory
                 data={data}
                 reports={reports}
@@ -1438,9 +1547,40 @@ export default function App() {
                 initialQuery=""
               />
             )}{" "}
+            {page === "memory" && data.nextOffset != null && (
+              <button
+                className="button soft full"
+                disabled={moreBusy}
+                onClick={more}
+              >
+                {moreBusy ? "正在加载…" : "加载更早的记忆与事件"}
+              </button>
+            )}
             {page === "records" && (
               <Records data={data} reports={reports} notify={setToast} />
             )}{" "}
+            {page === "settings" && (
+              <div className="action-row">
+                <button className="button soft" onClick={load}>
+                  刷新状态
+                </button>
+                <button
+                  className="button soft"
+                  onClick={async () => {
+                    try {
+                      await api.logout();
+                      setAuthenticated(false);
+                      setData(null);
+                      ++request.current;
+                    } catch {
+                      setToast("退出未完成，请重试。");
+                    }
+                  }}
+                >
+                  退出登录
+                </button>
+              </div>
+            )}
             {page === "settings" && (
               <Settings
                 data={data}
@@ -1505,6 +1645,13 @@ export default function App() {
                 ? "已合并跨渠道证据，保留全部来源。"
                 : "保留原始来源，不把推测写成事实。"}
             </footer>
+            <MemoryActions
+              entry={selected}
+              done={() => {
+                setSelected(null);
+                load();
+              }}
+            />
           </article>
         </Modal>
       )}
