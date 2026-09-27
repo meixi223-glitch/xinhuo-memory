@@ -14,12 +14,13 @@ class Models:
         self.query_cache = {}; self.lock = threading.Lock()
 
     def _model(self, role, fallback):
-        if os.getenv('XINHUO_WORKER_CONFIG'):
-            from room_config import effective
-            c=effective(role)
-            # Endpoint identity prevents mixing vectors from same-named models on different hosts.
-            return c['model']+'@'+hashlib.sha256(c['endpoint'].encode()).hexdigest()[:12] if role=='embedding' else c['model']
-        return fallback
+        # Always consult the saved worker config; room_config.effective() already
+        # falls back to the MEMORY_*_MODEL env defaults when nothing was saved, so
+        # web-set models take effect regardless of how the process was launched.
+        from room_config import effective
+        c=effective(role)
+        # Endpoint identity prevents mixing vectors from same-named models on different hosts.
+        return c['model']+'@'+hashlib.sha256(c['endpoint'].encode()).hexdigest()[:12] if role=='embedding' else c['model']
 
     @property
     def embed_model(self): return self._model('embedding',self._embed_model)
@@ -31,14 +32,12 @@ class Models:
     def rerank_model(self): return self._model('reranker',self._rerank_model)
     @property
     def embedding_enabled(self):
-        if os.getenv('XINHUO_WORKER_CONFIG'):
-            from room_config import effective
-            return bool(effective('embedding')['endpoint'])
-        return bool(self.base)
+        from room_config import effective
+        return bool(effective('embedding')['endpoint'])
 
     def call(self, endpoint, body, timeout=20, role=None):
         base, key = self.base, self.key
-        if os.getenv('XINHUO_WORKER_CONFIG') and role:
+        if role:
             from room_config import effective
             config = effective(role)
             base, key = config['endpoint'], config['apiKey']
@@ -83,10 +82,8 @@ class Models:
         return rows,d.get('tokens') or d.get('meta',{}).get('tokens',{})
 
     def query_vector(self, query):
-        identity = ''
-        if os.getenv('XINHUO_WORKER_CONFIG'):
-            from room_config import effective
-            identity = json.dumps(effective('embedding'), sort_keys=True)
+        from room_config import effective
+        identity = json.dumps(effective('embedding'), sort_keys=True)
         key=hashlib.sha256((identity+query).encode()).hexdigest()
         with self.lock:
             hit=self.query_cache.get(key)
