@@ -1,4 +1,4 @@
-"""Xiaoxing memory: additive SQLite migration, provenance, hybrid recall and audit."""
+"""Layered memory: additive SQLite migration, provenance, hybrid recall and audit."""
 from memory_core import MemoryStore as LegacyStore, now_iso, parse_time
 from memory_models import Models, ModelUnavailable
 from contextlib import contextmanager

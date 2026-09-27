@@ -3,6 +3,7 @@ from pathlib import Path
 from memory_v2 import MemoryStore
 from affect_core import BASE,decay
 from memory_retention import DAY
+from memory_narration import OWNER_NAME,WRONG_PRONOUN
 class Fake:
  embed_model=worker_model=judge_model='fixture'
  def __init__(self):self.proposal={};self.approved=True;self.calls=0;self.instructions=[]
@@ -37,8 +38,8 @@ class TestAffectRetention(unittest.TestCase):
   eid=self.event('今天我们一起完成了');self.propose('shared_success','一起完成了',{'joy':.08});self.s.affect.apply_event(eid)
   self.assertEqual(len(self.f.instructions),2)
   for instruction in self.f.instructions:
-   self.assertIn('本人是阿岚，女性',instruction)
-   self.assertIn('不用“用户／该用户／他／他的”称呼阿岚',instruction)
+   self.assertIn('本人是'+OWNER_NAME,instruction)
+   self.assertIn('不用“用户／该用户／'+WRONG_PRONOUN+'／'+WRONG_PRONOUN+'的”称呼'+OWNER_NAME,instruction)
  def test_thirty_days_freeze_not_reset_weight_dust_and_restore(self):
   mid=self.s.upsert({'content':'记忆甲','strength':3})['id'];self.now+=30*DAY;self.assertEqual(self.s.retention.state(mid)['weight'],3);self.now+=15*DAY;self.assertEqual(self.s.retention.state(mid)['weight'],2.5);self.s.retention.touch([mid],'receipt');self.now+=30*DAY;self.assertEqual(self.s.retention.state(mid)['weight'],2.5);self.now+=30*DAY;self.assertEqual(self.s.retention.state(mid)['weight'],1.5);self.s.retention.touch([mid],'receipt');self.assertEqual(self.s.retention.state(mid)['weight'],1.5);self.now+=45*DAY;self.assertEqual(self.s.retention.sweep()['dusted'],1);self.assertEqual(self.s.get(mid)['version_status'],'dusted');self.assertEqual(self.s.get(mid)['content'],'记忆甲');self.s.retention.restore(mid);self.assertEqual(self.s.retention.state(mid)['weight'],1);self.assertEqual(self.s.get(mid)['version_status'],'current')
  def test_browse_does_not_protect_and_conflicting_restore_is_candidate(self):

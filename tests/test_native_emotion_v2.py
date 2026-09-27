@@ -6,6 +6,7 @@ import time
 import unittest
 
 from affect_core import BASIC_DIMS, DIMS, RELATION_DIMS
+from memory_narration import OWNER_NAME
 from memory_v2 import MemoryStore
 
 
@@ -74,7 +75,7 @@ class NativeEmotionV2Test(unittest.TestCase):
         with self.store.connect() as db:self.assertEqual(db.execute('SELECT count(*) FROM affect_selfreports').fetchone()[0],1)
 
     def test_current_turn_evidence_works_without_bridge_session_identifiers(self):
-        self.inbound('阿岚说今天真的累死我了','m-current',session='example-session')
+        self.inbound(OWNER_NAME+'说今天真的累死我了','m-current',session='example-session')
         result=self.report(None,turn='turn-current',session_id=None,source_msg_id=None,evidence=['累死我了'])
         self.assertTrue(result['recorded'])
 
